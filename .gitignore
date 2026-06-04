@@ -1,0 +1,5 @@
+.venv/
+.env
+docs*/
+*.npy
+*.index

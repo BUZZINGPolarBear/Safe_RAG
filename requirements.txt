@@ -1,0 +1,8 @@
+langchain==0.3.29
+langchain-community==0.3.31
+langchain-core==0.3.85
+langchain-openai==0.3.35
+langchain-text-splitters==0.3.11
+pypdf==4.0.0
+python-dotenv==1.0.0
+openai==1.42.0
