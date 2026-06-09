@@ -3,3 +3,4 @@
 docs*/
 *.npy
 *.index
+.DS_Store
