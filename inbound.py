@@ -345,3 +345,7 @@ if __name__ == "__main__":
           f"{'정상' if chain_status['valid'] else '체인 손상: ' + str(chain_status)}")
 
 
+
+
+
+
