@@ -525,3 +525,4 @@ def run_pipeline(user_query: str):
 if run_clicked or st.session_state.trigger_run:
     st.session_state.trigger_run = False
     run_pipeline(query)
+  
