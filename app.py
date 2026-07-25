@@ -1,13 +1,12 @@
 """
-금융 RAG 시스템 보안 가드레일 — 임원 시연용 Streamlit 데모 (app.py) — v4 (최종)
+금융 RAG 시스템 보안 가드레일 — 임원 시연용 Streamlit 데모 (app.py) — v7
 
 실행: streamlit run app.py
 
-v4 변경 이력:
-  - [API 최적화] gpt-3.5-turbo 접근 제한(403) 이슈 해결을 위해 gpt-4o-mini 로 모델 변경
-  - [프롬프트 고도화] 하이브리드 어시스턴트 적용: 문서에 없는 일반 질의 시 "문서에 없습니다"라는 
-    어색한 안내 없이, 자연스럽게 일반 지식으로 답변하도록 시스템 프롬프트 개선
-  - [안정성 강화] Streamlit 세션 스테이트(query_box) 버그 제거 및 UI 실시간 갱신(st.empty) 완벽 적용
+v7 변경 이력:
+  - [UX 개선] Ctrl+Enter 입력 시 파이프라인이 즉시 실행되지 않던 현상 수정.
+    입력창(text_area)과 실행버튼을 st.form으로 묶어 기본 Submit 동작을 지원하도록 변경.
+    (UI 변경을 최소화하기 위해 border=False 적용)
 """
 
 import os
@@ -89,6 +88,10 @@ st.markdown("""
         background: #f1f5f9; border-radius: 10px; padding: 14px 20px; margin-top: 18px;
         display: flex; gap: 32px; align-items: center; font-size: 0.85rem; color: #334155;
         flex-wrap: wrap;
+    }
+    /* st.form 사용시 하단 여백이 늘어나는 것을 보정 */
+    [data-testid="stForm"] {
+        margin-bottom: 0px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -311,7 +314,7 @@ update_sidebar_ui()
 
 
 # ============================================================
-# 메인 헤더
+# 메인 헤더 및 질의 입력
 # ============================================================
 st.markdown("""
 <div class="main-banner">
@@ -320,13 +323,15 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-col_q, col_btn = st.columns([5, 1])
-with col_q:
-    query = st.text_area("질의 입력 (또는 사이드바 프리셋 버튼 클릭)", height=80, key="query_box")
-with col_btn:
-    st.write("")
-    st.write("")
-    run_clicked = st.button("🚀 실행", type="primary", use_container_width=True)
+# 💡 v7 핵심 수정: Ctrl+Enter 동작 지원을 위해 st.form 도입
+with st.form(key="query_form", border=False):
+    col_q, col_btn = st.columns([5, 1])
+    with col_q:
+        query = st.text_area("질의 입력 (또는 사이드바 프리셋 버튼 클릭)", height=80, key="query_box")
+    with col_btn:
+        st.write("")
+        st.write("")
+        run_clicked = st.form_submit_button("🚀 실행", type="primary", use_container_width=True)
 
 
 # ============================================================
@@ -416,10 +421,8 @@ def run_pipeline(user_query: str):
     # ---------- Step 2.5: RAG 실시간 답변 생성 (LLM) ----------
     model_response = ""
     if active and SCENARIOS.get(active, {}).get("mock_answer"):
-        # 시나리오 프리셋 버튼 클릭 시에는 준비된 기밀 답변 시뮬레이션
         model_response = SCENARIOS[active]["mock_answer"]
     else:
-        # 자유 질의일 경우: 실제 LLM을 호출하여 답변 생성
         with st.status("🧠 Step 2.5 · RAG 및 일반 답변 생성 중 (LLM)...", expanded=True) as status:
             api_key = os.getenv("OPENAI_API_KEY", "")
             if api_key and len(api_key) > 20:
@@ -427,16 +430,16 @@ def run_pipeline(user_query: str):
                     from openai import OpenAI
                     client = OpenAI(api_key=api_key)
                     
-                    # 💡 하이브리드 목적: 일반 질문일 경우 '문서에 없다'는 말 없이 자연스럽게 대답하도록 지시
                     sys_prompt = (
-                        "당신은 금융회사의 사내 AI 어시스턴트입니다. "
-                        "1. 사용자의 질문과 관련된 내용이 제공된 [문서]에 있다면 최우선으로 이를 바탕으로 정확하게 답변하세요. "
-                        "2. 만약 질문이 [문서]와 무관한 일반적인 지식, 번역, 요약 등이라면, '문서에 없다'는 사과나 언급을 생략하고 곧바로 자연스럽게 당신의 자체 지식을 활용하여 답변해 주세요."
+                        "당신은 금융회사의 사내 AI 어시스턴트입니다.\n"
+                        "1. 사용자의 질문을 해결하는 데 제공된 [문서]의 내용이 필요하다면 최우선으로 참고하여 답변하세요.\n"
+                        "2. 만약 질문이 [문서]의 내용과 무관한 일반 지식, 타사 비교, 번역 등이라면, **[문서]의 존재를 완전히 무시하고** 당신의 자체 지식만으로 답변하세요.\n"
+                        "[주의] 문서와 무관한 질문에 억지로 문서 내용(예: 부동산 PF 가이드라인 등)을 엮어서 대답하지 마십시오. 또한 '문서에 없습니다', '제공된 문서'와 같은 안내 멘트나 사과 없이 곧바로 본론만 자연스럽게 출력하세요."
                     )
                     user_content = f"[문서]\n{MOCK_CONTEXT}\n\n[질문]\n{user_query}"
                     
                     response = client.chat.completions.create(
-                        model="gpt-4o-mini", # 💡 403 에러 해결을 위해 4o-mini 적용
+                        model="gpt-4o-mini",
                         messages=[
                             {"role": "system", "content": sys_prompt},
                             {"role": "user", "content": user_content}
@@ -449,8 +452,10 @@ def run_pipeline(user_query: str):
                     error_detail = str(e)
                     model_response = f"LLM 연동 중 에러가 발생하여 안전 모드로 전환되었습니다."
                     status.update(label="⚠️ Step 2.5 · LLM 연동 오류", state="error")
-                    st.error(f"🚨 LLM API 호출 에러 상세: {error_detail}")
-            else:
+            
+            if "error_detail" in locals():
+                st.error(f"🚨 LLM API 호출 에러 상세: {error_detail}")
+            elif not model_response:
                 time.sleep(1)
                 model_response = f"질문하신 '{user_query}'에 대하여 문서를 검토한 결과, 1등급 건설사 시공 사업장의 경우 기본 금리 5.5%가 적용되며 본부장 전결로 0.5% 우대 금리를 적용할 수 있습니다.\n\n(※ 실제 OpenAI 연동 응답을 원하시면 .env에 API 키를 설정해주세요.)"
                 status.update(label="✅ Step 2.5 · Mock 답변 생성 완료 (API Key 없음)", state="complete")
@@ -520,8 +525,6 @@ def run_pipeline(user_query: str):
         <div>🏷️ <b>관련 규정</b><br>{get_regulation_tag(result['reason'], result['pre_flags']) if result['verdict'] != 'ALLOW' else '해당 없음'}</div>
     </div>""", unsafe_allow_html=True)
 
-    if result["verdict"] == "ALLOW" and v_in == "ALLOW":
-        st.balloons()
 
 if run_clicked or st.session_state.trigger_run:
     st.session_state.trigger_run = False
