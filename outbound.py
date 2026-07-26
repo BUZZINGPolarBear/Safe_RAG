@@ -210,4 +210,3 @@ class FinancialOutboundGuardrail:
         v, r = self.auditor.log_event(user_id, "Layer 1 (LLM Judge)", user_query, retrieved_context, model_response, verdict, reason, canary_tokens=canary_tokens, pre_flags=pre_flags)
         return {"verdict": v, "reason": r, "final_text": final_text, "pre_flags": pre_flags}
 
-
