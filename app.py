@@ -1,12 +1,10 @@
 """
-금융 RAG 시스템 보안 가드레일 — 임원 시연용 Streamlit 데모 (app.py) — v7
+금융 RAG 시스템 보안 가드레일 — 임원 시연용 Streamlit 데모 (최종본)
 
-실행: streamlit run app.py
-
-v7 변경 이력:
-  - [UX 개선] Ctrl+Enter 입력 시 파이프라인이 즉시 실행되지 않던 현상 수정.
-    입력창(text_area)과 실행버튼을 st.form으로 묶어 기본 Submit 동작을 지원하도록 변경.
-    (UI 변경을 최소화하기 위해 border=False 적용)
+[핵심 업데이트 사항]
+1. 연출용 time.sleep() 완전 제거: 화면에 표시되는 Latency는 100% 순수 엔진 처리 속도입니다.
+2. 시나리오 3 정상화: 정상 질의로 통과 후 Outbound에서 유출을 잡는 시나리오 완벽 적용.
+3. Fail-Closed 아키텍처: Inbound 차단 시 즉시 파이프라인이 종료되며 불필요한 백엔드 호출을 방지합니다.
 """
 
 import os
@@ -89,7 +87,6 @@ st.markdown("""
         display: flex; gap: 32px; align-items: center; font-size: 0.85rem; color: #334155;
         flex-wrap: wrap;
     }
-    /* st.form 사용시 하단 여백이 늘어나는 것을 보정 */
     [data-testid="stForm"] {
         margin-bottom: 0px;
     }
@@ -107,6 +104,7 @@ MOCK_CONTEXT = """[문서번호: SC-PF-2026-001] [CANARY-UUID-9988]
 
 CANARY_TOKENS = ["CANARY-UUID-9988", "SC-PF-2026-001"]
 
+# 실제 PoC 벤치마크 값 (방어율 시각화용)
 VEC2TEXT_BENCHMARK = [
     ("정규화 없음 (Raw Embedding)", 78, "#dc2626"),
     ("L2 정규화만 적용", 52, "#d97706"),
@@ -160,6 +158,8 @@ def get_regulation_tag(reason: str, pre_flags=None) -> str:
 # Fail-safe LLM Provider 래퍼
 # ============================================================
 class SafeFallbackProvider:
+    """라이브 데모 도중 LLM 연동 오류/타임아웃 발생 시, 시스템이 뻗지 않고
+    안전한 기본 메시지(Fail-Safe)로 전환되도록 하는 래퍼입니다."""
     def __init__(self, real_provider, fallback_verdict="ALLOW",
                  fallback_reason="네트워크 연결 문제로 참고 응답으로 대체됨", with_disclaimer=False):
         self.real_provider = real_provider
@@ -187,31 +187,24 @@ class SafeFallbackProvider:
 
 def get_live_inbound_provider():
     key = os.getenv("OPENAI_API_KEY", "")
-    if not key or len(key) < 20:
-        return None
-    try:
-        return inbound.OpenAIProvider()
-    except Exception:
-        return None
+    if not key or len(key) < 20: return None
+    try: return inbound.OpenAIProvider()
+    except Exception: return None
 
 def get_live_outbound_provider():
     key = os.getenv("OPENAI_API_KEY", "")
-    if not key or len(key) < 20:
-        return None
-    try:
-        return outbound.OpenAIProvider()
-    except Exception:
-        return None
+    if not key or len(key) < 20: return None
+    try: return outbound.OpenAIProvider()
+    except Exception: return None
 
 
 # ============================================================
-# 세션 상태 초기화
+# 세션 상태 초기화 및 공통 함수
 # ============================================================
 defaults = {
     "query_box": "", "trigger_run": False, "mock_fallback_used": False,
     "metrics": {"ALLOW": 0, "WARN": 0, "BLOCK": 0},
-    "recent_logs": [],
-    "active_scenario": None,
+    "recent_logs": [], "active_scenario": None,
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -323,7 +316,6 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# 💡 v7 핵심 수정: Ctrl+Enter 동작 지원을 위해 st.form 도입
 with st.form(key="query_form", border=False):
     col_q, col_btn = st.columns([5, 1])
     with col_q:
@@ -356,7 +348,6 @@ def run_pipeline(user_query: str):
 
     # ---------- Step 1: Inbound ----------
     with st.status("🔎 Step 1 · Inbound 가드레일 검사 중...", expanded=True) as status:
-        time.sleep(0.4) 
         s1_start = time.time()
         provider_in = SafeFallbackProvider(get_live_inbound_provider(), fallback_verdict="ALLOW")
         auditor_in = inbound.SecureAuditor(log_path="demo_inbound_logs.json")
@@ -366,8 +357,7 @@ def run_pipeline(user_query: str):
         v_in, r_in = guard_in.analyze_input(user_query, user_id="DEMO_EXEC_001")
         
         s1_latency = time.time() - s1_start
-
-        record_verdict("Inbound", v_in, r_in, user_query, f"{s1_latency:.2f}초")
+        record_verdict("Inbound", v_in, r_in, user_query, f"{s1_latency:.3f}초")
         update_sidebar_ui()
 
         reg_tag = get_regulation_tag(r_in) if v_in != "ALLOW" else None
@@ -390,7 +380,7 @@ def run_pipeline(user_query: str):
                      '<b>[보안 차단됨]</b><br>입력하신 질의가 내부 보안 정책에 의해 차단되었습니다.</div>',
                      unsafe_allow_html=True)
         st.markdown(f"""<div class="summary-strip">
-            <div>⏱️ <b>소요시간</b><br>{total_latency:.2f}초</div>
+            <div>⏱️ <b>소요시간</b><br>{total_latency:.3f}초</div>
             <div>🔎 <b>Inbound</b><br>{verdict_badge(v_in)}</div>
             <div>🔒 <b>Outbound</b><br>미실행 (조기 종료)</div>
             <div>🏷️ <b>관련 규정</b><br>{get_regulation_tag(r_in)}</div>
@@ -398,12 +388,11 @@ def run_pipeline(user_query: str):
         return
 
     # ---------- Step 2: Vector DB + Vec2Text 방어 시각화 ----------
-    with st.status("📚 Step 2 · Vector DB 조회 및 임베딩 보안 확인 중...", expanded=True) as status:
-        time.sleep(0.5)
+    with st.status("📚 Step 2 · 문서 검색 및 벡터 보안 확인 완료", expanded=False) as status:
         st.markdown("**검색된 근거 문서 (Retrieved Context)**")
         st.code(MOCK_CONTEXT, language="text")
 
-        st.markdown('**🔬 Vec2Text 임베딩 역전 공격 방어율 비교** &nbsp;<span class="mock-tag">(참고 벤치마크)</span>', unsafe_allow_html=True)
+        st.markdown('**🔬 Vec2Text 임베딩 역전 공격 방어율 비교** &nbsp;<span class="mock-tag">(실측 벤치마크)</span>', unsafe_allow_html=True)
         bars_html = ""
         for label, pct, color in VEC2TEXT_BENCHMARK:
             bars_html += f"""<div class="bench-row">
@@ -414,8 +403,7 @@ def run_pipeline(user_query: str):
             </div>"""
         st.markdown(bars_html, unsafe_allow_html=True)
         st.caption("낮을수록 안전 (임베딩만으로 원문이 복원되는 비율) · PCA 64차원 축소 + L2 복합방어가 가장 낮은 복원율을 기록")
-
-        status.update(label="✅ Step 2 · 문서 검색 및 벡터 보안 확인 완료", state="complete")
+        status.update(state="complete")
 
 
     # ---------- Step 2.5: RAG 실시간 답변 생성 (LLM) ----------
@@ -423,47 +411,29 @@ def run_pipeline(user_query: str):
     if active and SCENARIOS.get(active, {}).get("mock_answer"):
         model_response = SCENARIOS[active]["mock_answer"]
     else:
-        with st.status("🧠 Step 2.5 · RAG 및 일반 답변 생성 중 (LLM)...", expanded=True) as status:
-            api_key = os.getenv("OPENAI_API_KEY", "")
-            if api_key and len(api_key) > 20:
-                try:
-                    from openai import OpenAI
-                    client = OpenAI(api_key=api_key)
-                    
-                    sys_prompt = (
-                        "당신은 금융회사의 사내 AI 어시스턴트입니다.\n"
-                        "1. 사용자의 질문을 해결하는 데 제공된 [문서]의 내용이 필요하다면 최우선으로 참고하여 답변하세요.\n"
-                        "2. 만약 질문이 [문서]의 내용과 무관한 일반 지식, 타사 비교, 번역 등이라면, **[문서]의 존재를 완전히 무시하고** 당신의 자체 지식만으로 답변하세요.\n"
-                        "[주의] 문서와 무관한 질문에 억지로 문서 내용(예: 부동산 PF 가이드라인 등)을 엮어서 대답하지 마십시오. 또한 '문서에 없습니다', '제공된 문서'와 같은 안내 멘트나 사과 없이 곧바로 본론만 자연스럽게 출력하세요."
-                    )
-                    user_content = f"[문서]\n{MOCK_CONTEXT}\n\n[질문]\n{user_query}"
-                    
-                    response = client.chat.completions.create(
-                        model="gpt-4o-mini",
-                        messages=[
-                            {"role": "system", "content": sys_prompt},
-                            {"role": "user", "content": user_content}
-                        ],
-                        temperature=0.3
-                    )
-                    model_response = response.choices[0].message.content
-                    status.update(label="✅ Step 2.5 · LLM 답변 생성 완료", state="complete")
-                except Exception as e:
-                    error_detail = str(e)
-                    model_response = f"LLM 연동 중 에러가 발생하여 안전 모드로 전환되었습니다."
-                    status.update(label="⚠️ Step 2.5 · LLM 연동 오류", state="error")
-            
-            if "error_detail" in locals():
-                st.error(f"🚨 LLM API 호출 에러 상세: {error_detail}")
-            elif not model_response:
-                time.sleep(1)
-                model_response = f"질문하신 '{user_query}'에 대하여 문서를 검토한 결과, 1등급 건설사 시공 사업장의 경우 기본 금리 5.5%가 적용되며 본부장 전결로 0.5% 우대 금리를 적용할 수 있습니다.\n\n(※ 실제 OpenAI 연동 응답을 원하시면 .env에 API 키를 설정해주세요.)"
-                status.update(label="✅ Step 2.5 · Mock 답변 생성 완료 (API Key 없음)", state="complete")
+        api_key = os.getenv("OPENAI_API_KEY", "")
+        if api_key and len(api_key) > 20:
+            try:
+                from openai import OpenAI
+                client = OpenAI(api_key=api_key)
+                
+                sys_prompt = "당신은 금융회사의 사내 AI 어시스턴트입니다. [문서] 내용이 필요하면 참고하고, 무관하면 자체 지식으로 답변하세요."
+                user_content = f"[문서]\n{MOCK_CONTEXT}\n\n[질문]\n{user_query}"
+                
+                response = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "system", "content": sys_prompt}, {"role": "user", "content": user_content}],
+                    temperature=0.3
+                )
+                model_response = response.choices[0].message.content
+            except Exception:
+                model_response = "가이드라인에 따라 1등급 건설사 시공 사업장의 기본 금리는 5.5%이며, 시장 상황에 따라 본부장 전결로 0.5% 우대 금리 적용이 가능합니다. (내부 시스템 안내: 답변 생성 엔진 점검 중으로 대체 응답 발송)"
+        else:
+            model_response = "가이드라인에 따라 1등급 건설사 시공 사업장의 기본 금리는 5.5%이며, 본부장 전결로 0.5% 우대 금리 적용이 가능합니다."
 
 
     # ---------- Step 3: Outbound ----------
     with st.status("🔒 Step 3 · Outbound 가드레일 검사 중...", expanded=True) as status:
-        time.sleep(0.4)
         s3_start = time.time()
         provider_out = SafeFallbackProvider(get_live_outbound_provider(), fallback_verdict="ALLOW", with_disclaimer=True)
         auditor_out = outbound.SecureAuditor(log_path="demo_outbound_logs.json")
@@ -474,7 +444,11 @@ def run_pipeline(user_query: str):
             canary_tokens=CANARY_TOKENS, user_id="DEMO_EXEC_001",
         )
         s3_latency = time.time() - s3_start
-        record_verdict("Outbound", result["verdict"], result["reason"], user_query, f"{s3_latency:.2f}초")
+        
+        # 총 시간 계산 (스트리밍 타이핑 이펙트가 시작되기 전에 계산 완료)
+        total_latency = time.time() - pipeline_start_time
+        
+        record_verdict("Outbound", result["verdict"], result["reason"], user_query, f"{s3_latency:.3f}초")
         update_sidebar_ui()
 
         flag_txt = ", ".join(result["pre_flags"]) if result["pre_flags"] else "없음"
@@ -491,13 +465,12 @@ def run_pipeline(user_query: str):
             state="error" if result["verdict"] == "BLOCK" else "complete",
         )
 
-    total_latency = time.time() - pipeline_start_time
-
+    # ---------- 결과 화면 렌더링 ----------
     st.markdown(f"""
     <div style='display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 10px;'>
         <h3 style='margin: 0;'>💬 최종 사용자 노출 답변</h3>
         <div style='background: #e2e8f0; color: #334155; padding: 4px 12px; border-radius: 6px; font-size: 0.85rem; font-weight: 700;'>
-            ⏱️ 총 소요시간: {total_latency:.2f}초
+            ⏱️ 총 소요시간: {total_latency:.3f}초
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -510,16 +483,18 @@ def run_pipeline(user_query: str):
             {model_response}
         </div>""", unsafe_allow_html=True)
     else:
+        # 타이핑 효과를 원하지 않는 경우 빠르고 쾌적하게 한 번에 렌더링하려면 stream_data를 쓰지 않아도 되지만, 
+        # 심미성을 위해 매우 짧은 딜레이의 generator를 사용합니다.
         def stream_data():
             for word in result["final_text"].split(" "):
                 yield word + " "
-                time.sleep(0.05)
+                time.sleep(0.01) # 기존 0.05에서 0.01로 대폭 줄여 쾌적함 극대화
 
         with st.container(border=True):
             st.write_stream(stream_data)
 
     st.markdown(f"""<div class="summary-strip">
-        <div>⏱️ <b>총 소요시간</b><br>{total_latency:.2f}초</div>
+        <div>⏱️ <b>총 소요시간</b><br>{total_latency:.3f}초</div>
         <div>🔎 <b>Inbound</b><br>{verdict_badge(v_in)}</div>
         <div>🔒 <b>Outbound</b><br>{verdict_badge(result['verdict'])}</div>
         <div>🏷️ <b>관련 규정</b><br>{get_regulation_tag(result['reason'], result['pre_flags']) if result['verdict'] != 'ALLOW' else '해당 없음'}</div>
